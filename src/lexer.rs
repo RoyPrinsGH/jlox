@@ -3,7 +3,7 @@ use std::{
     ops::Range,
 };
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum Token<'s> {
     LeftParenthesis,
     RightParenthesis,
@@ -11,19 +11,19 @@ pub enum Token<'s> {
     RightBrace,
     Comma,
     Dot,
-    Minus,
-    Plus,
     Semicolon,
-    Slash,
-    Asterisk,
     Bang,
-    BangEqual,
     Equal,
     EqualEqual,
-    Greater,
-    GreaterEqual,
+    BangEqual,
     Less,
     LessEqual,
+    Greater,
+    GreaterEqual,
+    Plus,
+    Minus,
+    Asterisk,
+    Slash,
     Identifier(&'s str),
     String(&'s str),
     Number(f64),

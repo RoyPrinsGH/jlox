@@ -9,8 +9,12 @@ use ariadne::{Color, Label, Report, ReportKind, Source};
 use clap::Parser;
 use miette::{Context, IntoDiagnostic, Result, miette};
 
-use crate::lexer::{LexerError, lex};
+use crate::{
+    ast::parse,
+    lexer::{LexerError, lex},
+};
 
+pub mod ast;
 pub mod lexer;
 
 #[derive(Parser, Debug)]
@@ -91,23 +95,34 @@ fn report_lexer_error(script_name: &str, script_source: &str, span: Range<usize>
 fn run(script: impl AsRef<str>) -> Result<()> {
     let script = script.as_ref().trim();
 
-    let mut tokens = lex(script).peekable();
-
-    print!("tokens: [");
-
-    while let Some(result) = tokens.next() {
-        match result {
-            Ok(token) => {
-                print!("{token:?}");
-                if tokens.peek().is_some() {
-                    print!(", ");
-                }
-            }
-            Err((span, err)) => report_lexer_error("repl", script, span, err),
+    let tokens = lex(script).filter_map(|res| match res {
+        Ok(token) => Some(token),
+        Err((span, err)) => {
+            report_lexer_error("repl", script, span, err);
+            None
         }
-    }
+    });
 
-    print!("]\n");
+    //print!("tokens: [");
+    //
+    //while let Some(result) = tokens.next() {
+    //    match result {
+    //        Ok(token) => {
+    //            print!("{token:?}");
+    //
+    //            if tokens.peek().is_some() {
+    //                print!(", ");
+    //            }
+    //        }
+    //        Err((span, err)) => report_lexer_error("repl", script, span, err),
+    //    }
+    //}
+    //
+    //print!("]\n");
+
+    let expr = parse(&mut tokens.peekable());
+
+    println!("{expr}");
 
     Ok(())
 }
