@@ -95,34 +95,25 @@ fn report_lexer_error(script_name: &str, script_source: &str, span: Range<usize>
 fn run(script: impl AsRef<str>) -> Result<()> {
     let script = script.as_ref().trim();
 
-    let tokens = lex(script).filter_map(|res| match res {
-        Ok(token) => Some(token),
-        Err((span, err)) => {
-            report_lexer_error("repl", script, span, err);
-            None
-        }
-    });
+    let mut tokens = lex(script)
+        .filter_map(|res| match res {
+            Ok(token) => {
+                println!("{token:?}");
+                Some(token)
+            }
+            Err((span, err)) => {
+                report_lexer_error("repl", script, span, err);
+                None
+            }
+        })
+        .peekable();
 
-    //print!("tokens: [");
-    //
-    //while let Some(result) = tokens.next() {
-    //    match result {
-    //        Ok(token) => {
-    //            print!("{token:?}");
-    //
-    //            if tokens.peek().is_some() {
-    //                print!(", ");
-    //            }
-    //        }
-    //        Err((span, err)) => report_lexer_error("repl", script, span, err),
-    //    }
-    //}
-    //
-    //print!("]\n");
+    let expr = parse(&mut tokens);
 
-    let expr = parse(&mut tokens.peekable());
+    println!("-- Parsed expr = {expr}");
+    println!("-- Remaining tokens: ");
 
-    println!("{expr}");
+    _ = tokens.last();
 
     Ok(())
 }
