@@ -103,196 +103,170 @@ enum Token<'s> {
     EOF,
 }
 
-#[derive(Clone, Copy, Debug)]
-struct Position {
-    line: usize,
-    index_in_line: usize,
-    index: usize,
-}
-
-impl Position {
-    fn new_line(&mut self) {
-        self.line += 1;
-        self.index_in_line = 0;
-        self.index += 1;
-    }
-
-    fn further(&mut self) {
-        self.index_in_line += 1;
-        self.index += 1;
-    }
-}
-
 #[derive(Debug)]
 enum LexerError {
     UnrecognisedToken,
     UnfinishedString,
-    UnterminatedNumber,
     InvalidNumber,
 }
 
 #[derive(Debug)]
 struct TokenSpan {
-    start: Position,
-    end: Position,
+    start: usize,
+    end: usize,
 }
 
+#[derive(Clone, Copy, Debug)]
 enum LexerScope {
+    None,
     Unrecognised,
     String,
     Number,
 }
 
 fn lex<'a>(script: &'a str) -> impl Iterator<Item = Result<Token<'a>, (TokenSpan, LexerError)>> {
-    let mut current_position = Position {
-        line: 0,
-        index_in_line: 0,
-        index: 0,
-    };
-
-    let mut next_position = Position {
-        line: 0,
-        index_in_line: 0,
-        index: 0,
-    };
-
-    let mut scope = None;
-    let mut script_char_indices = script.chars().peekable().fuse();
-
-    let mut next_iter_yields = vec![];
+    let mut scope = (0, LexerScope::None);
+    let mut chars = script.char_indices().fuse().peekable();
+    let mut to_yield = Vec::new();
+    let mut exit = false;
 
     iter::from_fn(move || {
-        if let Some(item) = next_iter_yields.pop() {
-            return item;
+        if let Some(item) = to_yield.pop() {
+            return Some(item);
+        }
+
+        if exit {
+            return None;
         }
 
         loop {
-            current_position = next_position;
-            next_position.further();
+            match (scope, chars.next(), chars.peek()) {
+                ((_, LexerScope::None), Some((ix, c)), maybe_nc) => {
+                    let token = match c {
+                        '(' => Token::LeftParenthesis,
+                        ')' => Token::RightParenthesis,
+                        '{' => Token::LeftBrace,
+                        '}' => Token::RightBrace,
+                        ',' => Token::Comma,
+                        '.' => Token::Dot,
+                        '-' => Token::Minus,
+                        '+' => Token::Plus,
+                        ';' => Token::Semicolon,
+                        '*' => Token::Asterisk,
+                        '\n' | ' ' => {
+                            continue;
+                        }
+                        '\"' => {
+                            scope = (ix, LexerScope::String);
+                            continue;
+                        }
+                        c if c.is_ascii_digit() => {
+                            if let Some((_, nc)) = maybe_nc
+                                && nc.is_ascii_digit()
+                            {
+                                scope = (ix, LexerScope::Number);
+                                continue;
+                            } else {
+                                Token::Number((c as u8 - '0' as u8) as f64)
+                            }
+                        }
+                        _ => {
+                            scope = (ix, LexerScope::Unrecognised);
+                            continue;
+                        }
+                    };
 
-            let Some(character) = script_char_indices.next() else {
-                let (start, scope_type) = scope.take()?;
-
-                let err = match scope_type {
-                    LexerScope::Unrecognised => LexerError::UnrecognisedToken,
-                    LexerScope::String => LexerError::UnfinishedString,
-                    LexerScope::Number => LexerError::UnterminatedNumber,
-                };
-
-                next_iter_yields.push(None);
-
-                break Some(Err((
-                    TokenSpan {
-                        start,
-                        end: current_position,
-                    },
-                    err,
-                )));
-            };
-
-            if let Some((start, LexerScope::String)) = scope {
-                if character == '\"' {
-                    scope = None;
-                    break Some(Ok(Token::String(
-                        str::from_utf8(&script.as_bytes()[start.index + 1..current_position.index])
-                            .expect("script is utf8"),
-                    )));
-                } else if character == '\\' {
-                    let _ = script_char_indices.next();
-                    continue;
-                } else {
-                    continue;
+                    to_yield.push(Ok(token));
                 }
-            }
+                ((_, LexerScope::None), None, _) => {
+                    exit = true;
+                }
+                ((start, LexerScope::String), Some((ix, c)), _) => match c {
+                    '\"' => {
+                        to_yield.push(Ok(Token::String(&script[start + 1..ix])));
+                        scope = (ix, LexerScope::None)
+                    }
+                    '\\' => {
+                        // Escape char: Advance without looking
+                        _ = chars.next();
+                        continue;
+                    }
+                    _ => {
+                        continue;
+                    }
+                },
+                ((start, LexerScope::String), None, _) => {
+                    to_yield.push(Err((
+                        TokenSpan {
+                            start,
+                            end: script.len(),
+                        },
+                        LexerError::UnfinishedString,
+                    )));
+                    exit = true;
+                }
+                ((start, LexerScope::Number), _, Some((nc_ix, nc))) => {
+                    if nc.is_ascii_digit() || *nc == '.' {
+                        continue;
+                    } else {
+                        let result = (&script[start..*nc_ix])
+                            .parse()
+                            .map(|float| Token::Number(float))
+                            .map_err(|_| {
+                                (TokenSpan { start, end: *nc_ix }, LexerError::InvalidNumber)
+                            });
 
-            if let Some((start, LexerScope::Number)) = scope {
-                if character == '.' {
-                    continue;
-                } else if !character.is_ascii_digit() {
-                    scope = None;
-                    match str::from_utf8(&script.as_bytes()[start.index..current_position.index])
-                        .expect("script is utf8")
+                        to_yield.push(result);
+                        scope = (*nc_ix, LexerScope::None);
+                    }
+                }
+                ((start, LexerScope::Number), _, None) => {
+                    let result = (&script[start..])
                         .parse()
-                    {
-                        Ok(float) => break Some(Ok(Token::Number(float))),
-                        Err(_) => {
-                            break Some(Err((
+                        .map(|float| Token::Number(float))
+                        .map_err(|_| {
+                            (
                                 TokenSpan {
                                     start,
-                                    end: current_position,
+                                    end: script.len(),
                                 },
                                 LexerError::InvalidNumber,
-                            )));
-                        }
+                            )
+                        });
+
+                    to_yield.push(result);
+                    exit = true;
+                }
+                ((start, LexerScope::Unrecognised), Some((ix, c)), _) => match c {
+                    ' ' => {
+                        to_yield.push(Err((
+                            TokenSpan { start, end: ix },
+                            LexerError::UnrecognisedToken,
+                        )));
+                        scope = (ix, LexerScope::None);
                     }
-                } else {
-                    continue;
+                    _ => continue,
+                },
+                ((start, LexerScope::Unrecognised), None, _) => {
+                    to_yield.push(Err((
+                        TokenSpan {
+                            start,
+                            end: script.len(),
+                        },
+                        LexerError::UnrecognisedToken,
+                    )));
+                    exit = true;
                 }
             }
-
-            let token = match character {
-                '(' => Token::LeftParenthesis,
-                ')' => Token::RightParenthesis,
-                '{' => Token::LeftBrace,
-                '}' => Token::RightBrace,
-                ',' => Token::Comma,
-                '.' => Token::Dot,
-                '-' => Token::Minus,
-                '+' => Token::Plus,
-                ';' => Token::Semicolon,
-                '*' => Token::Asterisk,
-                ' ' => {
-                    continue;
-                }
-                '\n' => {
-                    current_position.new_line();
-                    continue;
-                }
-                '\"' => {
-                    if !matches!(&scope, Some((_, LexerScope::String))) {
-                        scope = Some((current_position, LexerScope::String));
-                    }
-                    continue;
-                }
-                c if c.is_ascii_digit() => {
-                    if !matches!(&scope, Some((_, LexerScope::Number))) {
-                        scope = Some((current_position, LexerScope::Number));
-                    }
-                    continue;
-                }
-                _ => {
-                    if !matches!(&scope, Some((_, LexerScope::Unrecognised))) {
-                        scope = Some((current_position, LexerScope::Unrecognised));
-                    }
-                    continue;
-                }
-            };
-
-            if let Some((start, scope_type)) = scope.take() {
-                let err = match scope_type {
-                    LexerScope::Unrecognised => LexerError::UnrecognisedToken,
-                    LexerScope::String => LexerError::UnfinishedString,
-                    LexerScope::Number => LexerError::UnterminatedNumber,
-                };
-
-                next_iter_yields.push(Some(Ok(token)));
-
-                break Some(Err((
-                    TokenSpan {
-                        start,
-                        end: current_position,
-                    },
-                    err,
-                )));
-            }
-
-            break Some(Ok(token));
+            break;
         }
+
+        to_yield.pop()
     })
 }
 
-fn report_lexer_error(script_source: &str, span: TokenSpan, error: LexerError) {
-    let mut report_builder = Report::build(ReportKind::Error, span.start.index..span.end.index);
+fn report_lexer_error(script_name: &str, script_source: &str, span: TokenSpan, error: LexerError) {
+    let mut report_builder = Report::build(ReportKind::Error, (script_name, span.start..span.end));
 
     match error {
         LexerError::UnfinishedString => {
@@ -300,7 +274,7 @@ fn report_lexer_error(script_source: &str, span: TokenSpan, error: LexerError) {
                 .with_code(1)
                 .with_message("Unfinished string")
                 .with_label(
-                    Label::new(span.end.index..span.end.index)
+                    Label::new((script_name, span.end..span.end))
                         .with_message("Expected end of string here")
                         .with_color(Color::Red),
                 )
@@ -310,18 +284,8 @@ fn report_lexer_error(script_source: &str, span: TokenSpan, error: LexerError) {
                 .with_code(2)
                 .with_message("Unrecognised token")
                 .with_label(
-                    Label::new(span.start.index..span.end.index)
+                    Label::new((script_name, span.start..span.end))
                         .with_message("What does this mean?")
-                        .with_color(Color::Red),
-                )
-        }
-        LexerError::UnterminatedNumber => {
-            report_builder = report_builder
-                .with_code(3)
-                .with_message("Unterminated number")
-                .with_label(
-                    Label::new(span.end.index..span.end.index)
-                        .with_message("Expected end of number here")
                         .with_color(Color::Red),
                 )
         }
@@ -330,7 +294,7 @@ fn report_lexer_error(script_source: &str, span: TokenSpan, error: LexerError) {
                 .with_code(3)
                 .with_message("Invalid number")
                 .with_label(
-                    Label::new(span.start.index..span.end.index)
+                    Label::new((script_name, span.start..span.end))
                         .with_message("This does not parse to a f64")
                         .with_color(Color::Red),
                 )
@@ -339,7 +303,7 @@ fn report_lexer_error(script_source: &str, span: TokenSpan, error: LexerError) {
 
     report_builder
         .finish()
-        .eprint(Source::from(script_source))
+        .eprint((script_name, Source::from(script_source)))
         .into_diagnostic()
         .wrap_err(miette!("Failed to print compiler error to stdout"))
         .expect("stdout available")
@@ -351,7 +315,7 @@ fn run(script: impl AsRef<str>) -> Result<()> {
     for restok in lex(script) {
         match restok {
             Ok(token) => println!("{token:?}"),
-            Err((span, err)) => report_lexer_error(script, span, err),
+            Err((span, err)) => report_lexer_error("repl", script, span, err),
         }
     }
 
