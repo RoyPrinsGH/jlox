@@ -1,0 +1,9 @@
+[package]
+name = "jlox"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+ariadne = "0.6.0"
+clap = { version = "4.5", features = ["derive"] }
+miette = { version = "7.6.0", features = ["fancy"] }
