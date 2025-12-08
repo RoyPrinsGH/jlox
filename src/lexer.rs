@@ -233,6 +233,7 @@ pub fn lex<'a>(source: &'a str) -> impl Iterator<Item = Result<Token<'a>, (Range
                     }
                 }
                 (Some(Span { from, kind: SpanKind::Number }), _, None) => {
+                    span_tracker.reset();
                     break (&source[from..])
                         .parse()
                         .map(|float| Token::Number(float))
