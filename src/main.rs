@@ -38,7 +38,7 @@ fn run_prompt() -> Result<()> {
     let mut line_to_execute = String::new();
 
     loop {
-        print!("[Jlox REPL] >> ");
+        print!("> ");
 
         stdout()
             .flush()
@@ -162,7 +162,7 @@ fn lex<'a>(script: &'a str) -> impl Iterator<Item = Result<Token<'a>, (TokenSpan
                         }
                         c if c.is_ascii_digit() => {
                             if let Some((_, nc)) = maybe_nc
-                                && nc.is_ascii_digit()
+                                && (nc.is_ascii_digit() || *nc == '.')
                             {
                                 scope = (ix, LexerScope::Number);
                                 continue;
@@ -312,12 +312,23 @@ fn report_lexer_error(script_name: &str, script_source: &str, span: TokenSpan, e
 fn run(script: impl AsRef<str>) -> Result<()> {
     let script = script.as_ref().trim();
 
-    for restok in lex(script) {
-        match restok {
-            Ok(token) => println!("{token:?}"),
+    let mut tokens = lex(script).peekable();
+
+    print!("tokens: [");
+
+    while let Some(result) = tokens.next() {
+        match result {
+            Ok(token) => {
+                print!("{token:?}");
+                if tokens.peek().is_some() {
+                    print!(", ");
+                }
+            }
             Err((span, err)) => report_lexer_error("repl", script, span, err),
         }
     }
+
+    print!("]\n");
 
     Ok(())
 }
