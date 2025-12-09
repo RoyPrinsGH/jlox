@@ -11,10 +11,12 @@ use miette::{Context, IntoDiagnostic, Result, miette};
 
 use crate::{
     ast::parse,
+    eval::eval,
     lexer::{LexerError, lex},
 };
 
 pub mod ast;
+pub mod eval;
 pub mod lexer;
 
 #[derive(Parser, Debug)]
@@ -114,6 +116,10 @@ fn run(script: impl AsRef<str>) -> Result<()> {
     println!("-- Remaining tokens: ");
 
     _ = tokens.last();
+
+    let eval = eval(expr);
+
+    println!("-- Evaluated: {eval:?}");
 
     Ok(())
 }

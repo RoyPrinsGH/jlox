@@ -34,6 +34,7 @@ impl Display for BinOp {
     }
 }
 
+#[derive(Debug, PartialEq)]
 pub enum Literal {
     Number(f64),
     String(String),
