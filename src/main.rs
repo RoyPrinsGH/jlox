@@ -11,7 +11,7 @@ use miette::{Context, IntoDiagnostic, Result, miette};
 
 use crate::{
     ast::parse,
-    eval::eval,
+    eval::{EvalError, eval},
     lexer::{LexerError, lex},
 };
 
@@ -94,6 +94,41 @@ fn report_lexer_error(script_name: &str, script_source: &str, span: Range<usize>
         .expect("stdout available")
 }
 
+fn report_eval_error(script_name: &str, script_source: &str, span: Range<usize>, error: EvalError) {
+    let mut report_builder = Report::build(ReportKind::Error, (script_name, span.start..span.end));
+
+    match error {
+        EvalError::CannotEvalInvalidExpr => {
+            report_builder = report_builder.with_code(4).with_message("Invalid expression").with_label(
+                Label::new((script_name, span.end..span.end))
+                    .with_message("This is an invalid expression and thus cannot be evaluated")
+                    .with_color(Color::Red),
+            )
+        }
+        EvalError::UnOp(op, _lit) => {
+            report_builder = report_builder.with_code(5).with_message("Cannot evaluate unary operator").with_label(
+                Label::new((script_name, span.start..span.end))
+                    .with_message(format!("The operator {op:?} is not valid for this item"))
+                    .with_color(Color::Red),
+            )
+        }
+        EvalError::BinOp(op, _lhs, _rhs) => {
+            report_builder = report_builder.with_code(6).with_message("Cannot evaluate binary operator").with_label(
+                Label::new((script_name, span.start..span.end))
+                    .with_message(format!("The operator {op:?} is not valid for these items"))
+                    .with_color(Color::Red),
+            )
+        }
+    }
+
+    report_builder
+        .finish()
+        .eprint((script_name, Source::from(script_source)))
+        .into_diagnostic()
+        .wrap_err(miette!("Failed to print compiler error to stdout"))
+        .expect("stdout available")
+}
+
 fn run(script: impl AsRef<str>) -> Result<()> {
     let script = script.as_ref().trim();
 
@@ -117,9 +152,10 @@ fn run(script: impl AsRef<str>) -> Result<()> {
 
     _ = tokens.last();
 
-    let eval = eval(expr);
-
-    println!("-- Evaluated: {eval:?}");
+    match eval(expr) {
+        Ok(eval) => println!("-- Evaluated: {eval:?}"),
+        Err(err) => report_eval_error("repl", script, 0..script.len(), err),
+    }
 
     Ok(())
 }
