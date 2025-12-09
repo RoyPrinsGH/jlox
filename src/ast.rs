@@ -2,6 +2,7 @@ use std::{fmt::Display, iter::Peekable};
 
 use crate::lexer::Token;
 
+#[derive(Debug)]
 pub enum BinOp {
     EqualEqual,
     BangEqual,
@@ -57,6 +58,7 @@ impl Display for Literal {
     }
 }
 
+#[derive(Debug)]
 pub enum UnOp {
     Negate,
     Negative,
