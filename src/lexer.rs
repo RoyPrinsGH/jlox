@@ -3,8 +3,14 @@ use std::{
     ops::Range,
 };
 
+#[derive(Debug)]
+pub struct Token<'s> {
+    pub data: TokenData<'s>,
+    pub span: Range<usize>,
+}
+
 #[derive(Debug, PartialEq)]
-pub enum Token<'s> {
+pub enum TokenData<'s> {
     LeftParenthesis,
     RightParenthesis,
     LeftBrace,
@@ -53,106 +59,89 @@ pub enum LexerError {
     InvalidNumber,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Default)]
 enum SpanKind {
+    #[default]
+    None,
     Unrecognised,
     String,
     Number,
     Identifier,
 }
 
-#[derive(Debug, Clone, Copy)]
-struct Span {
+#[derive(Debug, Clone, Copy, Default)]
+struct SpanTracker {
     from: usize,
     kind: SpanKind,
 }
 
-#[derive(Debug)]
-struct SpanTracker {
-    span: Option<Span>,
-}
-
-impl SpanTracker {
-    fn new() -> Self {
-        Self { span: None }
-    }
-
-    fn track_new(&mut self, ix: usize, kind: SpanKind) {
-        self.span = Some(Span { from: ix, kind })
-    }
-
-    fn reset(&mut self) {
-        self.span = None;
-    }
-}
-
-fn ident_to_token<'s>(ident: &'s str) -> Token<'s> {
+fn ident_to_token<'s>(ident: &'s str) -> TokenData<'s> {
     match ident {
-        "and" => Token::And,
-        "class" => Token::Class,
-        "else" => Token::Else,
-        "false" => Token::False,
-        "for" => Token::For,
-        "fun" => Token::Fun,
-        "if" => Token::If,
-        "nil" => Token::Nil,
-        "or" => Token::Or,
-        "print" => Token::Print,
-        "return" => Token::Return,
-        "super" => Token::Super,
-        "this" => Token::This,
-        "true" => Token::True,
-        "var" => Token::Var,
-        "while" => Token::While,
-        non_reserved => Token::Identifier(non_reserved),
+        "and" => TokenData::And,
+        "class" => TokenData::Class,
+        "else" => TokenData::Else,
+        "false" => TokenData::False,
+        "for" => TokenData::For,
+        "fun" => TokenData::Fun,
+        "if" => TokenData::If,
+        "nil" => TokenData::Nil,
+        "or" => TokenData::Or,
+        "print" => TokenData::Print,
+        "return" => TokenData::Return,
+        "super" => TokenData::Super,
+        "this" => TokenData::This,
+        "true" => TokenData::True,
+        "var" => TokenData::Var,
+        "while" => TokenData::While,
+        non_reserved => TokenData::Identifier(non_reserved),
     }
 }
 
-pub fn lex<'a>(source: &'a str) -> impl Iterator<Item = Result<Token<'a>, (Range<usize>, LexerError)>> {
-    let mut span_tracker = SpanTracker::new();
+pub fn lex<'a>(source: &'a str) -> impl Iterator<Item = (Range<usize>, Result<TokenData<'a>, LexerError>)> {
+    let mut span_tracker = SpanTracker::default();
     let mut chars = source.char_indices().fuse().peekable();
     iter::from_fn(move || {
         let token_or_err = loop {
-            match (span_tracker.span, chars.next(), chars.peek()) {
-                (None, Some((ix, c)), maybe_nc) => {
+            match (&mut span_tracker, chars.next(), chars.peek()) {
+                (span @ SpanTracker { kind: SpanKind::None, .. }, Some((ix, c)), maybe_nc) => {
                     let token = match c {
-                        '(' => Token::LeftParenthesis,
-                        ')' => Token::RightParenthesis,
-                        '{' => Token::LeftBrace,
-                        '}' => Token::RightBrace,
-                        ',' => Token::Comma,
-                        '.' => Token::Dot,
-                        '-' => Token::Minus,
-                        '+' => Token::Plus,
-                        ';' => Token::Semicolon,
-                        '*' => Token::Asterisk,
+                        '(' => TokenData::LeftParenthesis,
+                        ')' => TokenData::RightParenthesis,
+                        '{' => TokenData::LeftBrace,
+                        '}' => TokenData::RightBrace,
+                        ',' => TokenData::Comma,
+                        '.' => TokenData::Dot,
+                        '-' => TokenData::Minus,
+                        '+' => TokenData::Plus,
+                        ';' => TokenData::Semicolon,
+                        '*' => TokenData::Asterisk,
                         '!' => match maybe_nc {
                             Some((_, '=')) => {
                                 _ = chars.next();
-                                Token::BangEqual
+                                TokenData::BangEqual
                             }
-                            _ => Token::Bang,
+                            _ => TokenData::Bang,
                         },
                         '=' => match maybe_nc {
                             Some((_, '=')) => {
                                 _ = chars.next();
-                                Token::EqualEqual
+                                TokenData::EqualEqual
                             }
-                            _ => Token::Equal,
+                            _ => TokenData::Equal,
                         },
                         '<' => match maybe_nc {
                             Some((_, '=')) => {
                                 _ = chars.next();
-                                Token::LessEqual
+                                TokenData::LessEqual
                             }
-                            _ => Token::Less,
+                            _ => TokenData::Less,
                         },
                         '>' => match maybe_nc {
                             Some((_, '=')) => {
                                 _ = chars.next();
-                                Token::GreaterEqual
+                                TokenData::GreaterEqual
                             }
-                            _ => Token::Greater,
+                            _ => TokenData::Greater,
                         },
                         '/' => match maybe_nc {
                             Some((_, '/')) => {
@@ -169,46 +158,51 @@ pub fn lex<'a>(source: &'a str) -> impl Iterator<Item = Result<Token<'a>, (Range
                                 }
                                 continue;
                             }
-                            _ => Token::Slash,
+                            _ => TokenData::Slash,
                         },
                         '\n' | ' ' => continue,
                         '\"' => {
-                            span_tracker.track_new(ix, SpanKind::String);
+                            *span = SpanTracker { from: ix, kind: SpanKind::String };
                             continue;
                         }
                         c if c.is_ascii_digit() => {
                             if let Some((_, nc)) = maybe_nc
                                 && (nc.is_ascii_digit() || *nc == '.')
                             {
-                                span_tracker.track_new(ix, SpanKind::Number);
+                                *span = SpanTracker { from: ix, kind: SpanKind::Number };
                                 continue;
                             } else {
-                                Token::Number((c as u8 - '0' as u8) as f64)
+                                TokenData::Number((c as u8 - '0' as u8) as f64)
                             }
                         }
                         c if c.is_alphabetic() => {
                             if let Some((_, nc)) = maybe_nc
                                 && nc.is_alphanumeric()
                             {
-                                span_tracker.track_new(ix, SpanKind::Identifier);
+                                *span = SpanTracker {
+                                    from: ix,
+                                    kind: SpanKind::Identifier,
+                                };
                                 continue;
                             } else {
                                 ident_to_token(&source[ix..=ix])
                             }
                         }
                         _ => {
-                            span_tracker.track_new(ix, SpanKind::Unrecognised);
+                            *span = SpanTracker {
+                                from: ix,
+                                kind: SpanKind::Unrecognised,
+                            };
                             continue;
                         }
                     };
 
                     break Ok(token);
                 }
-                (None, None, _) => return None,
-                (Some(Span { from, kind: SpanKind::String }), Some((ix, c)), _) => match c {
+                (SpanTracker { kind: SpanKind::None, .. }, None, _) => return None,
+                (SpanTracker { from, kind: SpanKind::String }, Some((ix, c)), _) => match c {
                     '\"' => {
-                        span_tracker.reset();
-                        break Ok(Token::String(&source[from + 1..ix]));
+                        break Ok(TokenData::String(&source[*from + 1..ix]));
                     }
                     '\\' => {
                         // Escape char: Advance without looking
@@ -217,55 +211,46 @@ pub fn lex<'a>(source: &'a str) -> impl Iterator<Item = Result<Token<'a>, (Range
                     }
                     _ => continue,
                 },
-                (Some(Span { from, kind: SpanKind::String }), None, _) => {
-                    span_tracker.reset();
-                    break Err((from..source.len(), LexerError::UnfinishedString));
+                (SpanTracker { kind: SpanKind::String, .. }, None, _) => {
+                    break Err(LexerError::UnfinishedString);
                 }
-                (Some(Span { from, kind: SpanKind::Number }), _, Some((nc_ix, nc))) => {
+                (SpanTracker { from, kind: SpanKind::Number }, _, Some((nc_ix, nc))) => {
                     if nc.is_ascii_digit() || *nc == '.' {
                         continue;
                     } else {
-                        span_tracker.reset();
-                        break (&source[from..*nc_ix])
-                            .parse()
-                            .map(|float| Token::Number(float))
-                            .map_err(|_| (from..*nc_ix, LexerError::InvalidNumber));
+                        break (&source[*from..*nc_ix]).parse().map(|float| TokenData::Number(float)).map_err(|_| LexerError::InvalidNumber);
                     }
                 }
-                (Some(Span { from, kind: SpanKind::Number }), _, None) => {
-                    span_tracker.reset();
-                    break (&source[from..])
-                        .parse()
-                        .map(|float| Token::Number(float))
-                        .map_err(|_| ((from..source.len()), LexerError::InvalidNumber));
+                (SpanTracker { from, kind: SpanKind::Number }, _, None) => {
+                    break (&source[*from..]).parse().map(|float| TokenData::Number(float)).map_err(|_| LexerError::InvalidNumber);
                 }
-                (Some(Span { from, kind: SpanKind::Unrecognised }), Some((ix, c)), _) => match c {
-                    ' ' => {
-                        span_tracker.reset();
-                        break Err(((from..ix), LexerError::UnrecognisedToken));
-                    }
+                (SpanTracker { kind: SpanKind::Unrecognised, .. }, Some((_, c)), _) => match c {
+                    ' ' => break Err(LexerError::UnrecognisedToken),
                     _ => continue,
                 },
-                (Some(Span { from, kind: SpanKind::Unrecognised }), None, _) => {
-                    span_tracker.reset();
-                    break Err(((from..source.len()), LexerError::UnrecognisedToken));
-                }
-                (Some(Span { from, kind: SpanKind::Identifier }), _, Some((nc_ix, nc))) => {
+                (SpanTracker { kind: SpanKind::Unrecognised, .. }, None, _) => break Err(LexerError::UnrecognisedToken),
+                (SpanTracker { from, kind: SpanKind::Identifier }, _, Some((nc_ix, nc))) => {
                     if nc.is_alphanumeric() {
                         continue;
                     } else {
-                        span_tracker.reset();
-                        break Ok(ident_to_token(&source[from..*nc_ix]));
+                        break Ok(ident_to_token(&source[*from..*nc_ix]));
                     }
                 }
-                (Some(Span { from, kind: SpanKind::Identifier }), _, None) => {
-                    span_tracker.reset();
-                    break Ok(ident_to_token(&source[from..]));
-                }
+                (SpanTracker { from, kind: SpanKind::Identifier }, _, None) => break Ok(ident_to_token(&source[*from..])),
             }
         };
 
-        Some(token_or_err)
+        let span = match chars.peek() {
+            Some((ncix, _)) => span_tracker.from..*ncix,
+            None => span_tracker.from..source.len(),
+        };
+
+        span_tracker = SpanTracker {
+            from: span.end + 1,
+            kind: SpanKind::None,
+        };
+
+        Some((span, token_or_err))
     })
-    .chain(iter::once(Ok(Token::EOF)))
+    .chain(iter::once((source.len()..source.len(), Ok(TokenData::EOF))))
 }

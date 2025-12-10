@@ -12,7 +12,7 @@ use miette::{Context, IntoDiagnostic, Result, miette};
 use crate::{
     ast::parse,
     eval::{EvalError, eval},
-    lexer::{LexerError, lex},
+    lexer::{LexerError, Token, lex},
 };
 
 pub mod ast;
@@ -108,14 +108,14 @@ fn report_eval_error(script_name: &str, script_source: &str, span: Range<usize>,
         EvalError::UnOp(op, _lit) => {
             report_builder = report_builder.with_code(5).with_message("Cannot evaluate unary operator").with_label(
                 Label::new((script_name, span.start..span.end))
-                    .with_message(format!("The operator {op:?} is not valid for this item"))
+                    .with_message(format!("The operator `{op:?}` is not valid for this item"))
                     .with_color(Color::Red),
             )
         }
         EvalError::BinOp(op, _lhs, _rhs) => {
             report_builder = report_builder.with_code(6).with_message("Cannot evaluate binary operator").with_label(
                 Label::new((script_name, span.start..span.end))
-                    .with_message(format!("The operator {op:?} is not valid for these items"))
+                    .with_message(format!("The operator `{op:?}` is not valid for these items"))
                     .with_color(Color::Red),
             )
         }
@@ -133,12 +133,12 @@ fn run(script: impl AsRef<str>) -> Result<()> {
     let script = script.as_ref().trim();
 
     let mut tokens = lex(script)
-        .filter_map(|res| match res {
+        .filter_map(|(span, res)| match res {
             Ok(token) => {
                 println!("{token:?}");
-                Some(token)
+                Some(Token { data: token, span })
             }
-            Err((span, err)) => {
+            Err(err) => {
                 report_lexer_error("repl", script, span, err);
                 None
             }
@@ -154,7 +154,7 @@ fn run(script: impl AsRef<str>) -> Result<()> {
 
     match eval(expr) {
         Ok(eval) => println!("-- Evaluated: {eval:?}"),
-        Err(err) => report_eval_error("repl", script, 0..script.len(), err),
+        Err((span, err)) => report_eval_error("repl", script, span, err),
     }
 
     Ok(())

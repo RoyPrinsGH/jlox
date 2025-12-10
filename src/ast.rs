@@ -1,6 +1,6 @@
-use std::{fmt::Display, iter::Peekable};
+use std::{fmt::Display, iter::Peekable, ops::Range};
 
-use crate::lexer::Token;
+use crate::lexer::{Token, TokenData};
 
 #[derive(Debug)]
 pub enum BinOp {
@@ -73,7 +73,24 @@ impl Display for UnOp {
     }
 }
 
-pub enum Expr {
+pub struct Expr {
+    pub data: ExprData,
+    pub span: Range<usize>,
+}
+
+impl Expr {
+    fn new_boxed(data: ExprData, span: Range<usize>) -> Box<Self> {
+        Box::new(Self { data, span })
+    }
+}
+
+impl Display for Expr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} @[{} - {}]", self.data, self.span.start, self.span.end - 1)
+    }
+}
+
+pub enum ExprData {
     Literal(Literal),
     Unary(UnOp, Box<Expr>),
     Binary(Box<Expr>, BinOp, Box<Expr>),
@@ -81,22 +98,22 @@ pub enum Expr {
     Invalid,
 }
 
-impl Display for Expr {
+impl Display for ExprData {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Expr::Literal(lit) => {
+            ExprData::Literal(lit) => {
                 write!(f, "{lit}")
             }
-            Expr::Unary(op, expr) => {
+            ExprData::Unary(op, expr) => {
                 write!(f, "({op} {expr})")
             }
-            Expr::Binary(lhs, op, rhs) => {
+            ExprData::Binary(lhs, op, rhs) => {
                 write!(f, "({lhs} {op} {rhs})")
             }
-            Expr::Grouping(expr) => {
+            ExprData::Grouping(expr) => {
                 write!(f, "{expr}")
             }
-            Expr::Invalid => {
+            ExprData::Invalid => {
                 write!(f, "?")
             }
         }
@@ -107,47 +124,50 @@ fn consume_primary<'t, Tokens>(tokens: &mut Peekable<Tokens>) -> Box<Expr>
 where
     Tokens: Iterator<Item = Token<'t>>,
 {
-    let Some(nt) = tokens.next() else {
-        return Box::new(Expr::Invalid);
+    let Some(token) = tokens.next() else {
+        return Expr::new_boxed(ExprData::Invalid, 0..0);
     };
-
-    let literal = match nt {
-        Token::False => Literal::False,
-        Token::True => Literal::True,
-        Token::Nil => Literal::Nil,
-        Token::Number(n) => Literal::Number(n),
-        Token::String(s) => Literal::String(s.to_owned()),
-        Token::LeftParenthesis => {
+    let literal = match token.data {
+        TokenData::False => Literal::False,
+        TokenData::True => Literal::True,
+        TokenData::Nil => Literal::Nil,
+        TokenData::Number(n) => Literal::Number(n),
+        TokenData::String(s) => Literal::String(s.to_owned()),
+        TokenData::LeftParenthesis => {
             let expr = consume_expression(tokens);
-
-            let Some(Token::RightParenthesis) = tokens.next() else {
-                return Box::new(Expr::Invalid);
+            let Some(Token {
+                span,
+                data: TokenData::RightParenthesis,
+            }) = tokens.next()
+            else {
+                return Expr::new_boxed(ExprData::Invalid, token.span.start..expr.span.end);
             };
-
-            return Box::new(Expr::Grouping(expr));
+            return Expr::new_boxed(ExprData::Grouping(expr), token.span.start..span.end);
         }
-        _ => return Box::new(Expr::Invalid),
+        _ => {
+            return Expr::new_boxed(ExprData::Invalid, token.span);
+        }
     };
-
-    Box::new(Expr::Literal(literal))
+    return Expr::new_boxed(ExprData::Literal(literal), token.span);
 }
 
 fn consume_unary<'t, Tokens>(tokens: &mut Peekable<Tokens>) -> Box<Expr>
 where
     Tokens: Iterator<Item = Token<'t>>,
 {
-    let Some(nt) = tokens.peek() else {
-        return Box::new(Expr::Invalid);
+    let Some(next_token) = tokens.peek() else {
+        return Expr::new_boxed(ExprData::Invalid, 0..0);
     };
-
-    let un_op = match nt {
-        Token::Bang => UnOp::Negate,
-        Token::Minus => UnOp::Negative,
+    let un_op = match next_token.data {
+        TokenData::Bang => UnOp::Negate,
+        TokenData::Minus => UnOp::Negative,
         _ => return consume_primary(tokens),
     };
-
+    let un_op_span_start = next_token.span.start;
     _ = tokens.next();
-    return Box::new(Expr::Unary(un_op, consume_unary(tokens)));
+    let unary_expr = consume_unary(tokens);
+    let unary_expr_span_end = unary_expr.span.end;
+    return Expr::new_boxed(ExprData::Unary(un_op, unary_expr), un_op_span_start..unary_expr_span_end);
 }
 
 fn consume_factor<'t, Tokens>(tokens: &mut Peekable<Tokens>) -> Box<Expr>
@@ -155,23 +175,21 @@ where
     Tokens: Iterator<Item = Token<'t>>,
 {
     let mut ret_expr = consume_unary(tokens);
-
     loop {
-        let Some(nt) = tokens.peek() else {
+        let Some(next_token) = tokens.peek() else {
             break;
         };
-
-        let bin_op = match nt {
-            Token::Slash => BinOp::Slash,
-            Token::Asterisk => BinOp::Asterisk,
+        let bin_op = match next_token.data {
+            TokenData::Slash => BinOp::Slash,
+            TokenData::Asterisk => BinOp::Asterisk,
             _ => break,
         };
-
+        let ret_expr_span_start = ret_expr.span.start;
         _ = tokens.next();
-        let rhs = consume_unary(tokens);
-        ret_expr = Box::new(Expr::Binary(ret_expr, bin_op, rhs))
+        let rhs = consume_factor(tokens);
+        let rhs_span_end = rhs.span.end;
+        ret_expr = Expr::new_boxed(ExprData::Binary(ret_expr, bin_op, rhs), ret_expr_span_start..rhs_span_end);
     }
-
     ret_expr
 }
 
@@ -180,23 +198,22 @@ where
     Tokens: Iterator<Item = Token<'t>>,
 {
     let mut ret_expr = consume_factor(tokens);
-
     loop {
-        let Some(nt) = tokens.peek() else {
+        let Some(next_token) = tokens.peek() else {
             break;
         };
 
-        let bin_op = match nt {
-            Token::Minus => BinOp::Minus,
-            Token::Plus => BinOp::Plus,
+        let bin_op = match next_token.data {
+            TokenData::Minus => BinOp::Minus,
+            TokenData::Plus => BinOp::Plus,
             _ => break,
         };
-
+        let ret_expr_span_start = ret_expr.span.start;
         _ = tokens.next();
         let rhs = consume_factor(tokens);
-        ret_expr = Box::new(Expr::Binary(ret_expr, bin_op, rhs))
+        let rhs_span_end = rhs.span.end;
+        ret_expr = Expr::new_boxed(ExprData::Binary(ret_expr, bin_op, rhs), ret_expr_span_start..rhs_span_end);
     }
-
     ret_expr
 }
 
@@ -205,25 +222,23 @@ where
     Tokens: Iterator<Item = Token<'t>>,
 {
     let mut ret_expr = consume_term(tokens);
-
     loop {
-        let Some(nt) = tokens.peek() else {
+        let Some(next_token) = tokens.peek() else {
             break;
         };
-
-        let bin_op = match nt {
-            Token::Greater => BinOp::Greater,
-            Token::GreaterEqual => BinOp::GreaterEqual,
-            Token::Less => BinOp::Less,
-            Token::LessEqual => BinOp::LessEqual,
+        let bin_op = match next_token.data {
+            TokenData::Greater => BinOp::Greater,
+            TokenData::GreaterEqual => BinOp::GreaterEqual,
+            TokenData::Less => BinOp::Less,
+            TokenData::LessEqual => BinOp::LessEqual,
             _ => break,
         };
-
+        let ret_expr_span_start = ret_expr.span.start;
         _ = tokens.next();
         let rhs = consume_term(tokens);
-        ret_expr = Box::new(Expr::Binary(ret_expr, bin_op, rhs))
+        let rhs_span_end = rhs.span.end;
+        ret_expr = Expr::new_boxed(ExprData::Binary(ret_expr, bin_op, rhs), ret_expr_span_start..rhs_span_end);
     }
-
     ret_expr
 }
 
@@ -232,23 +247,21 @@ where
     Tokens: Iterator<Item = Token<'t>>,
 {
     let mut ret_expr = consume_comparison(tokens);
-
     loop {
-        let Some(nt) = tokens.peek() else {
+        let Some(next_token) = tokens.peek() else {
             break;
         };
-
-        let bin_op = match nt {
-            Token::BangEqual => BinOp::BangEqual,
-            Token::EqualEqual => BinOp::EqualEqual,
+        let bin_op = match next_token.data {
+            TokenData::BangEqual => BinOp::BangEqual,
+            TokenData::EqualEqual => BinOp::EqualEqual,
             _ => break,
         };
-
+        let ret_expr_span_start = ret_expr.span.start;
         _ = tokens.next();
         let rhs = consume_comparison(tokens);
-        ret_expr = Box::new(Expr::Binary(ret_expr, bin_op, rhs))
+        let rhs_span_end = rhs.span.end;
+        ret_expr = Expr::new_boxed(ExprData::Binary(ret_expr, bin_op, rhs), ret_expr_span_start..rhs_span_end);
     }
-
     ret_expr
 }
 
@@ -264,32 +277,4 @@ where
     Tokens: Iterator<Item = Token<'t>>,
 {
     consume_expression(tokens)
-}
-
-#[cfg(test)]
-mod tests {
-    use crate::{
-        ast::{BinOp, Expr, Literal, UnOp, parse},
-        lexer::Token,
-    };
-
-    #[test]
-    fn test_display() {
-        let expr = Box::new(Expr::Binary(
-            Box::new(Expr::Literal(Literal::True)),
-            BinOp::BangEqual,
-            Box::new(Expr::Grouping(Box::new(Expr::Unary(UnOp::Negate, Box::new(Expr::Literal(Literal::True)))))),
-        ));
-
-        println!("{expr}")
-    }
-
-    #[test]
-    fn test_ast_parse() {
-        let tokens = [Token::True, Token::BangEqual, Token::LeftParenthesis, Token::Bang, Token::Number(123.0), Token::RightParenthesis];
-
-        let expr = parse(&mut tokens.into_iter().peekable());
-
-        println!("{expr}")
-    }
 }

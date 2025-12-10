@@ -1,4 +1,6 @@
-use crate::ast::{BinOp, Expr, Literal, UnOp};
+use std::ops::Range;
+
+use crate::ast::{BinOp, Expr, ExprData, Literal, UnOp};
 
 fn is_truthy(lit: Literal) -> bool {
     match lit {
@@ -17,17 +19,17 @@ pub enum EvalError {
 }
 
 // Should probably make use of trait impls on Eval, but this works for a first step
-pub fn eval(expr: Box<Expr>) -> Result<Literal, EvalError> {
-    match *expr {
-        Expr::Grouping(inner) => eval(inner),
-        Expr::Invalid => Err(EvalError::CannotEvalInvalidExpr),
-        Expr::Unary(un_op, inner) => match (un_op, eval(inner)?) {
+pub fn eval(expr: Box<Expr>) -> Result<Literal, (Range<usize>, EvalError)> {
+    match expr.data {
+        ExprData::Grouping(inner) => eval(inner),
+        ExprData::Invalid => Err((expr.span, EvalError::CannotEvalInvalidExpr)),
+        ExprData::Unary(un_op, inner) => match (un_op, eval(inner)?) {
             (UnOp::Negate, e) => Ok(if is_truthy(e) { Literal::False } else { Literal::True }),
             (UnOp::Negative, Literal::Number(n)) => Ok(Literal::Number(-n)),
-            (UnOp::Negative, e) => Err(EvalError::UnOp(UnOp::Negative, e)),
+            (UnOp::Negative, e) => Err((expr.span, EvalError::UnOp(UnOp::Negative, e))),
         },
-        Expr::Literal(lit) => Ok(lit),
-        Expr::Binary(lhs, bin_op, rhs) => match (eval(lhs)?, bin_op, eval(rhs)?) {
+        ExprData::Literal(lit) => Ok(lit),
+        ExprData::Binary(lhs, bin_op, rhs) => match (eval(lhs)?, bin_op, eval(rhs)?) {
             (Literal::Number(a), BinOp::Plus, Literal::Number(b)) => Ok(Literal::Number(a + b)),
             (Literal::String(a), BinOp::Plus, Literal::String(b)) => {
                 let mut ac = a.clone();
@@ -43,7 +45,7 @@ pub fn eval(expr: Box<Expr>) -> Result<Literal, EvalError> {
             (Literal::Number(a), BinOp::LessEqual, Literal::Number(b)) => Ok(if a <= b { Literal::True } else { Literal::False }),
             (Literal::Number(a), BinOp::Greater, Literal::Number(b)) => Ok(if a > b { Literal::True } else { Literal::False }),
             (Literal::Number(a), BinOp::GreaterEqual, Literal::Number(b)) => Ok(if a >= b { Literal::True } else { Literal::False }),
-            (l, b, r) => Err(EvalError::BinOp(b, l, r)),
+            (l, b, r) => Err((expr.span, EvalError::BinOp(b, l, r))),
         },
     }
 }
